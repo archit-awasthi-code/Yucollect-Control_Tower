@@ -49,20 +49,84 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+db = DatabaseManager()
+
+def get_earliest_date():
+    try:
+        cur = db.get_ingestion_cursor()
+        if not cur:
+            return (datetime.now() - timedelta(days=30)).date()
+            
+        cur.execute("""
+            SELECT MIN(created_at)::date
+            FROM allocation_files
+            WHERE created_at IS NOT NULL;
+        """)
+        result = cur.fetchone()
+        return result['min'] if result and result['min'] else (datetime.now() - timedelta(days=30)).date()
+    except Exception as e:
+        st.error(f"Error getting earliest date: {str(e)}")
+        return (datetime.now() - timedelta(days=30)).date()
+
+# Always get the earliest date first
+earliest_date = get_earliest_date()
+
+# Initialize dates from main dashboard's session state
+start_date = st.session_state.start_date if 'start_date' in st.session_state else earliest_date
+end_date = st.session_state.end_date if 'end_date' in st.session_state else datetime.now().date()
+
+# Initialize session state for this page's dates
+if 'agency_start_date' not in st.session_state:
+    st.session_state.agency_start_date = start_date
+if 'agency_end_date' not in st.session_state:
+    st.session_state.agency_end_date = end_date
+
+start_date_str = start_date.strftime('%Y-%m-%d')
+end_date_str = end_date.strftime('%Y-%m-%d')
+
 # Title
 st.title("Agency Details")
 
 # Date filter
 st.markdown('<h3>Filter by Date Range</h3>', unsafe_allow_html=True)
 date_col1, date_col2 = st.columns(2)
+
+def sync_dates(key, value):
+    """Sync dates with main dashboard"""
+    if key.endswith('_start_date'):
+        st.session_state.start_date = value
+        st.session_state.main_start_date = value
+    elif key.endswith('_end_date'):
+        st.session_state.end_date = value
+        st.session_state.main_end_date = value
+
+def update_dates(key, value):
+    if key.endswith('_start_date'):
+        st.session_state.agency_start_date = value
+    elif key.endswith('_end_date'):
+        st.session_state.agency_end_date = value
+
 with date_col1:
-    start_date = st.date_input("Start Date", value=datetime.now() - timedelta(days=30), key="agency_start_date")
+    start_date = st.date_input(
+        "Start Date",
+        value=st.session_state.agency_start_date,
+        key="agency_start_date",
+        on_change=lambda: update_dates('agency_start_date', st.session_state.agency_start_date)
+    )
 with date_col2:
-    end_date = st.date_input("End Date", value=datetime.now(), key="agency_end_date")
-    
-# Convert dates to strings for SQL query
+    end_date = st.date_input(
+        "End Date",
+        value=st.session_state.agency_end_date,
+        key="agency_end_date",
+        on_change=lambda: update_dates('agency_end_date', st.session_state.agency_end_date)
+    )
+
+# Convert dates to strings for queries
 start_date_str = start_date.strftime('%Y-%m-%d')
 end_date_str = end_date.strftime('%Y-%m-%d')
+
+# Display current date range
+st.markdown(f"**Date Range:** {start_date.strftime('%d %b %Y')} to {end_date.strftime('%d %b %Y')}")
 
 # Define India states geojson (simplified for this example)
 india_states = {
@@ -261,11 +325,11 @@ try:
         # Create a formatted channels column
         def format_channels(row):
             channels = []
-            if row["Digital Channel"]:
+            if row["Digital Channel"] == 'Yes':
                 channels.append("Digital")
-            if row["Call Channel"]:
+            if row["Call Channel"] == 'Yes':
                 channels.append("Call")
-            if row["Field Channel"]:
+            if row["Field Channel"] == 'Yes':
                 channels.append("Field")
             return ", ".join(channels) if channels else "None"
         

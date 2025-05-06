@@ -2,15 +2,16 @@ import streamlit as st
 
 # Page config - must be the first Streamlit command
 st.set_page_config(
-    page_title="Control Tower",
+    page_title="Yucollect Control Tower",
     layout="wide",
-    initial_sidebar_state="collapsed"
+    initial_sidebar_state="expanded"  # Keep sidebar always open
 )
 
 import pandas as pd
 import altair as alt
 import os
 import sys
+import logging
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
 import psycopg2
@@ -51,6 +52,113 @@ def view_all_button(page_name):
 
 # Initialize database connections
 db = DatabaseManager()
+
+# Custom CSS for styling
+st.markdown("""
+    <style>
+    /* Remove top padding from main container */
+    .main .block-container {
+        padding-top: 1rem !important;
+        max-width: 100% !important;
+    }
+
+    /* Hide the sidebar collapse button and title */
+    .css-fblp2m, section[data-testid="stSidebar"] .block-container > div:first-child {
+        display: none !important;
+    }
+
+    /* Single menu sidebar */
+    section[data-testid="stSidebar"], section[data-testid="stSidebar"] > div {
+        background-color: #ffffff !important;
+    }
+    section[data-testid="stSidebar"] .block-container {
+        margin-top: 0 !important;
+        padding-top: 2rem !important;
+    }
+    section[data-testid="stSidebar"] ul {
+        padding-left: 0 !important;
+    }
+    section[data-testid="stSidebar"] ul > li > div {
+        border-radius: 0 !important;
+        margin: 0 !important;
+        border: none !important;
+    }
+    section[data-testid="stSidebar"] ul > li > div:hover {
+        background-color: #f1f5f9 !important;
+    }
+    section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
+        font-size: 14px !important;
+        padding: 0.5rem 1rem !important;
+        margin: 0 !important;
+    }
+
+    /* Header layout */
+    .header-container {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0;
+        margin-bottom: 1rem;
+    }
+
+    .title-section {
+        flex: 1;
+    }
+
+    .controls-section {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-left: auto;
+    }
+
+    /* Style the title */
+    .main-title {
+        font-size: 32px !important;
+        font-weight: 700 !important;
+        color: #2c3e50 !important;
+        margin: 0 !important;
+        line-height: 1.2 !important;
+    }
+
+    /* Date inputs styling */
+    .stDateInput {
+        min-width: 140px !important;
+    }
+    .stDateInput > label {
+        display: none !important;
+    }
+    .stDateInput > div > div {
+        padding: 0.25rem !important;
+    }
+
+    /* Refresh text */
+    .refresh-info {
+        font-size: 16px !important;
+        font-weight: 500 !important;
+        color: #2c3e50 !important;
+        margin-left: 1.5rem !important;
+        white-space: nowrap !important;
+    }
+
+    /* Fix date input container width */
+    [data-testid="column"] > div:has(> div.stDateInput) {
+        width: auto !important;
+        flex: 0 0 auto !important;
+    }
+
+    /* Adjust date separator */
+    .date-separator {
+        padding: 8px 0 0;
+        color: #475569;
+        text-align: center;
+        width: 100%;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # Add Bootstrap dependencies
 st.markdown("""
@@ -209,77 +317,145 @@ st.markdown("""
 # Custom CSS for sidebar title and navigation
 st.markdown("""
 <style>
-    span.sidebar-title {
-        font-size: 1.4rem !important;
+    .css-1aumxhk {
+        font-size: 1rem !important;
+        text-transform: capitalize !important;
+    }
+    .sidebar-title {
+        font-size: 1.5rem !important;
         font-weight: 600 !important;
         margin-bottom: 1rem !important;
-        color: #2c3e50 !important;
-        display: none !important; /* Hide the sidebar title */
-    }
-    
-    /* Capitalize page names in sidebar navigation */
-    section[data-testid="stSidebar"] li div p {
-        text-transform: capitalize !important;
-        font-size: 1rem !important;
-    }
-    
-    /* Style for the main page name in sidebar */
-    section[data-testid="stSidebar"] ul li:first-child div p {
-        font-weight: bold !important;
-        font-size: 1.1rem !important;
-    }
-    
-    /* Custom capitalization for Control Tower Dashboard */
-    section[data-testid="stSidebar"] ul li:first-child div p:first-letter,
-    section[data-testid="stSidebar"] ul li:first-child div p span:nth-child(2):first-letter,
-    section[data-testid="stSidebar"] ul li:first-child div p span:nth-child(3):first-letter {
-        text-transform: uppercase !important;
+        color: #2c3e50;
     }
 </style>
 """, unsafe_allow_html=True)
 
 # Add a custom title to the sidebar
-st.sidebar.markdown('<span class="sidebar-title">Control Tower</span>', unsafe_allow_html=True)
+st.sidebar.markdown('<span class="sidebar-title">Yucollect Control Tower</span>', unsafe_allow_html=True)
 
 # Create sidebar navigation links for View All buttons
 if 'view_all_target' not in st.session_state:
     st.session_state.view_all_target = None
 
+# Function to get earliest date from database
+def get_earliest_date():
+    try:
+        cur = db.get_ingestion_cursor()
+        if not cur:
+            return (datetime.now() - timedelta(days=30)).date()
+            
+        cur.execute("""
+            SELECT MIN(created_at)::date
+            FROM allocation_files
+            WHERE created_at IS NOT NULL;
+        """)
+        result = cur.fetchone()
+        return result['min'] if result and result['min'] else (datetime.now() - timedelta(days=30)).date()
+    except Exception as e:
+        st.error(f"Error getting earliest date: {str(e)}")
+        return (datetime.now() - timedelta(days=30)).date()
+
+# Always get the earliest date first
+earliest_date = get_earliest_date()
+
+# Initialize session state for dates
+if 'start_date' not in st.session_state:
+    st.session_state.start_date = earliest_date
+if 'end_date' not in st.session_state:
+    st.session_state.end_date = datetime.now().date()
+
+# Update function for date sync
+def update_dates(changed_key, value):
+    if changed_key == 'main_start_date':
+        st.session_state.start_date = value
+        # Update all other start dates in session state
+        for k in st.session_state.keys():
+            if k.endswith('_start_date') and k != 'main_start_date':
+                st.session_state[k] = value
+    elif changed_key == 'main_end_date':
+        st.session_state.end_date = value
+        # Update all other end dates in session state
+        for k in st.session_state.keys():
+            if k.endswith('_end_date') and k != 'main_end_date':
+                st.session_state[k] = value
+
 # Header with title and date controls
-header_container = st.container()
-with header_container:
-    # Create all columns at once with appropriate widths
-    col1, col2, col3, col4, col5, col6, col7 = st.columns([2, 2.5, 0.8, 0.15, 0.8, 1.5, 0.5])
-    
-    with col1:
-        st.markdown('<h1 class="title">Yucollect Control Tower</h1>', unsafe_allow_html=True)
-    
-    with col2:
-        st.write("")  # Empty space to push date pickers right
-    
-    with col3:
-        start_date = st.date_input("", 
-                                datetime.now() - timedelta(days=30),
-                                label_visibility="collapsed",
-                                key="start_date")
-    
-    with col4:
-        st.markdown('<div class="date-separator">To</div>', unsafe_allow_html=True)
-    
-    with col5:
-        end_date = st.date_input("", 
-                                datetime.now(),
-                                label_visibility="collapsed",
-                                key="end_date")
-    
-    with col6:
-        st.markdown(f'<div class="refresh-info">Last Refreshed On: {format_date(datetime.now())} {datetime.now().strftime("%I:%M %p")}</div>', unsafe_allow_html=True)
-    
-    with col7:
-        if st.button("🔄", type="primary"):
-            # Clear cache when refreshing
-            CacheManager.clear_all_caches()
-            st.experimental_rerun()
+st.markdown("""
+<div class="header-container">
+    <div class="title-section">
+        <h1 class="main-title">Yucollect Control Tower</h1>
+    </div>
+    <div class="date-controls">
+""", unsafe_allow_html=True)
+
+st.markdown("""
+    <style>
+        /* Date controls section */
+        .date-controls {
+            display: flex;
+            align-items: center;
+            margin-left: auto;
+        }
+        .date-label {
+            font-size: 14px;
+            font-weight: 500;
+            color: #475569;
+            padding-right: 4px;
+            padding-top: 8px;
+        }
+        .date-separator {
+            padding: 8px 0 0;
+            color: #475569;
+            text-align: center;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+        .refresh-info {
+            margin-left: 16px;
+            padding-top: 8px;
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+# Date Range Filter
+col1, col2, col3, col4, col5, col6 = st.columns([0.15, 0.4, 0.12, 0.15, 0.4, 0.6])
+
+with col1:
+    st.markdown('<div class="date-label">Start Date</div>', unsafe_allow_html=True)
+
+with col2:
+    start_date = st.date_input(
+        "",
+        value=st.session_state.start_date,
+        key="main_start_date",
+        label_visibility="collapsed",
+        on_change=lambda: update_dates('main_start_date', st.session_state.main_start_date)
+    )
+
+with col3:
+    st.markdown('<div class="date-separator">To</div>', unsafe_allow_html=True)
+
+with col4:
+    st.markdown('<div class="date-label">End Date</div>', unsafe_allow_html=True)
+
+with col5:
+    end_date = st.date_input(
+        "",
+        value=st.session_state.end_date,
+        key="main_end_date",
+        label_visibility="collapsed",
+        on_change=lambda: update_dates('main_end_date', st.session_state.main_end_date)
+    )
+
+with col6:
+    st.markdown(f'<div class="refresh-info">Last Refreshed On: {format_date(datetime.now())} {datetime.now().strftime("%I:%M %p")}</div>', unsafe_allow_html=True)
+
+st.markdown('</div></div>', unsafe_allow_html=True)
+
+# Summary Section
+st.markdown('<h2 class="section-heading">Summary</h2>', unsafe_allow_html=True)
 
 # Convert dates to strings for SQL queries
 start_date_str = start_date.strftime('%Y-%m-%d')
@@ -547,7 +723,7 @@ def get_user_metrics():
         # Get user distribution metrics
         cur.execute("""
             WITH user_metrics AS (
-                SELECT
+                SELECT 
                     COUNT(DISTINCT id) as total_users,
                     COUNT(DISTINCT CASE WHEN role = 'SUPERVISOR' THEN id END) as total_supervisors,
                     COUNT(DISTINCT CASE WHEN role = 'AGENT' THEN id END) as total_call_agents,

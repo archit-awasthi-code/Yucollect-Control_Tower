@@ -131,10 +131,11 @@ def get_user_data():
                 END as "Total Time Spent (Hours)"
             FROM yucollect_agent ya
             LEFT JOIN agency a ON ya.agency_id = a.agency_id
+            WHERE ya.updated_at BETWEEN %s AND %s
             ORDER BY ya.updated_at DESC NULLS LAST
             LIMIT 1000;  -- Add limit to prevent excessive data loading
         """
-        cur.execute(query)
+        cur.execute(query, (st.session_state.start_date, st.session_state.end_date))
         user_details = cur.fetchall()
         
         if user_details:
@@ -151,8 +152,79 @@ def get_user_data():
         if 'cur' in locals() and cur:
             cur.close()
 
+db = DatabaseManager()
+
+def get_earliest_date():
+    try:
+        cur = db.get_ingestion_cursor()
+        if not cur:
+            return (datetime.now() - timedelta(days=30)).date()
+            
+        cur.execute("""
+            SELECT MIN(created_at)::date
+            FROM allocation_files
+            WHERE created_at IS NOT NULL;
+        """)
+        result = cur.fetchone()
+        return result['min'] if result and result['min'] else (datetime.now() - timedelta(days=30)).date()
+    except Exception as e:
+        st.error(f"Error getting earliest date: {str(e)}")
+        return (datetime.now() - timedelta(days=30)).date()
+
+# Always get the earliest date first
+earliest_date = get_earliest_date()
+
+# Initialize dates from main dashboard's session state
+start_date = st.session_state.start_date if 'start_date' in st.session_state else earliest_date
+end_date = st.session_state.end_date if 'end_date' in st.session_state else datetime.now().date()
+
+# Initialize session state for this page's dates
+if 'user_start_date' not in st.session_state:
+    st.session_state.user_start_date = start_date
+if 'user_end_date' not in st.session_state:
+    st.session_state.user_end_date = end_date
+
+start_date_str = start_date.strftime('%Y-%m-%d')
+end_date_str = end_date.strftime('%Y-%m-%d')
+
 # Title
 st.title("User Details")
+
+# Date filter
+st.markdown('<h3>Filter by Date Range</h3>', unsafe_allow_html=True)
+date_col1, date_col2 = st.columns(2)
+
+def update_dates(key, value):
+    """Update dates in session state"""
+    if key.endswith('_start_date'):
+        st.session_state.start_date = value
+        st.session_state.user_start_date = value
+    elif key.endswith('_end_date'):
+        st.session_state.end_date = value
+        st.session_state.user_end_date = value
+
+with date_col1:
+    start_date = st.date_input(
+        "Start Date",
+        value=st.session_state.user_start_date,
+        key="user_start_date",
+        on_change=lambda: update_dates('user_start_date', st.session_state.user_start_date)
+    )
+
+with date_col2:
+    end_date = st.date_input(
+        "End Date",
+        value=st.session_state.user_end_date,
+        key="user_end_date",
+        on_change=lambda: update_dates('user_end_date', st.session_state.user_end_date)
+    )
+
+# Convert dates to strings for queries
+start_date_str = start_date.strftime('%Y-%m-%d')
+end_date_str = end_date.strftime('%Y-%m-%d')
+
+# Display current date range
+st.markdown(f"**Date Range:** {format_date(start_date)} to {format_date(end_date)}")
 
 # Show loading spinner while fetching data
 with st.spinner("Loading user data..."):
